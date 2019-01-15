@@ -5,6 +5,7 @@
 import scipy
 from astropy import units
 
+from stellar_evolution.library_interface import MESAInterpolator
 from orbital_evolution.binary import Binary
 from orbital_evolution.transformations import phase_lag
 from orbital_evolution.star_interface import EvolvingStar
@@ -117,14 +118,18 @@ def create_system(primary,
             The binary system ready to evolve.
     """
 
-    binary = Binary(primary=primary,
-                    secondary=secondary,
-                    initial_orbital_period=porb_initial,
-                    initial_eccentricity=initial_eccentricity,
-                    initial_inclination=0.0,
-                    disk_lock_frequency=(2.0 * scipy.pi / disk_lock_period),
-                    disk_dissipation_age=disk_dissipation_age,
-                    secondary_formation_age=disk_dissipation_age)
+    binary = Binary(
+        primary=primary,
+        secondary=secondary,
+        initial_orbital_period=porb_initial.to(units.day).value,
+        initial_eccentricity=initial_eccentricity,
+        initial_inclination=0.0,
+        disk_lock_frequency=(2.0 * scipy.pi
+                             /
+                             disk_lock_period.to(units.day).value),
+        disk_dissipation_age=disk_dissipation_age.to(units.Gyr).value,
+        secondary_formation_age=disk_dissipation_age.to(units.Gyr).value
+    )
     binary.configure(age=primary.core_formation_age(),
                      semimajor=float('nan'),
                      eccentricity=float('nan'),
@@ -138,16 +143,18 @@ def create_system(primary,
     else:
         initial_inclination = None
         initial_periapsis = None
-    secondary.configure(age=disk_dissipation_age,
-                        companion_mass=primary.mass,
-                        semimajor=binary.semimajor(porb_initial),
-                        eccentricity=initial_eccentricity,
-                        spin_angmom=scipy.array([0.0]),
-                        inclination=initial_inclination,
-                        periapsis=initial_periapsis,
-                        locked_surface=False,
-                        zero_outer_inclination=True,
-                        zero_outer_periapsis=True)
+    secondary.configure(
+        age=disk_dissipation_age.to(units.Gyr).value,
+        companion_mass=primary.mass,
+        semimajor=binary.semimajor(porb_initial.to(units.day).value),
+        eccentricity=initial_eccentricity,
+        spin_angmom=scipy.array([0.0]),
+        inclination=initial_inclination,
+        periapsis=initial_periapsis,
+        locked_surface=False,
+        zero_outer_inclination=True,
+        zero_outer_periapsis=True
+    )
     primary.detect_stellar_wind_saturation()
     if isinstance(secondary, EvolvingStar):
         secondary.detect_stellar_wind_saturation()
@@ -163,20 +170,23 @@ class EccentricitySolverCallable:
                  interpolator,
                  *,
                  current_age,
-                 star_period,
+                 primary_period,
                  disk_dissipation_age,
                  max_timestep,
                  primary_lgq,
-                 secondary_lgq):
+                 secondary_lgq,
+                 secondary_star=False):
         """
         Get ready for the solver.
 
         Args:
             system:    The parameters of the system we are trying to reproduce.
 
-            interpolator:    The stellar evolution interpolator to use.
+            interpolator:    The stellar evolution interpolator to use, could
+                also be a pair of interpolators, one to use for the primary and
+                one for the secondary.
 
-            star_period: The period at which the star will initially spin.
+            primary_period: The period at which the primaly will initially spin.
 
             disk_dissipation_age:    The age at which the disk dissipates and
                 the secondary forms.
@@ -188,19 +198,34 @@ class EccentricitySolverCallable:
             None
         """
 
-        self.target_state = Structure(age=current_age,
-                                      Porb=system.Porb,
-                                      Pdisk=star_period)
+        self.target_state = Structure(
+            #False positive
+            #pylint: disable=no-member
+            age=current_age.to(units.Gyr).value,
+            Porb=system.Porb.to(units.day).value,
+            Pdisk=primary_period.to(units.day).value,
+            planet_formation_age=disk_dissipation_age.to(units.Gyr).value
+            #pylint: enable=no-member
+        )
         self.system = system
-        self.interpolator = interpolator
+        if isinstance(interpolator, MESAInterpolator):
+            self.interpolator = dict(primary=interpolator,
+                                     secondary=interpolator)
+        else:
+            self.interpolator = dict(primary=interpolator[0],
+                                     secondary=interpolator[1])
         self.configuration = dict(
-            disk_dissipation_age=disk_dissipation_age,
-            max_timestep=max_timestep,
+            #False positive
+            #pylint: disable=no-member
+            disk_dissipation_age=disk_dissipation_age.to(units.Gyr).value,
+            max_timestep=max_timestep.to(units.Gyr).value,
+            #pylint: enable=no-member
             primary_lgQ=primary_lgq,
             secondary_lgQ=secondary_lgq
         )
         self.porb_initial = None
         self.psurf_initial = None
+        self.secondary_star = secondary_star
 
     def __call__(self, initial_eccentricity):
         """
@@ -229,26 +254,84 @@ class EccentricitySolverCallable:
             evolution_max_time_step=self.configuration['max_timestep'],
             initial_eccentricity=initial_eccentricity
         )
-        star = create_star(self.system.Mprimary,
-                           self.system.feh,
-                           self.interpolator,
-                           self.configuration['primary_lgQ'])
-        planet = create_planet(self.system,
-                               self.configuration['secondary_lgQ'])
+        primary = create_star(
+            self.system.Mprimary,
+            self.system.feh,
+            self.interpolator['primary'],
+            self.configuration['primary_lgQ']
+        )
+        if self.secondary_star:
+            secondary = create_star(
+                self.system.Msecondary,
+                self.system.feh,
+                self.interpolator['secondary'],
+                self.configuration['secondary_lgQ']
+            )
+        else:
+            secondary = create_planet(
+                self.system.Msecondary,
+                self.system.Rsecondary,
+                self.configuration['secondary_lgQ']
+            )
         self.porb_initial, self.psurf_initial = find_ic(self.target_state,
-                                                        star,
-                                                        planet)
+                                                        primary,
+                                                        secondary)
         #False positive
         #pylint: disable=no-member
+        self.porb_initial *= units.day
+        self.psurf_initial *= units.day
         final_eccentricity = find_ic.binary.final_state().eccentricity
         #pylint: enable=no-member
         print('Final eccentricity: ' + repr(final_eccentricity))
-        star.delete()
-        planet.delete()
+        primary.delete()
+        secondary.delete()
         find_ic.binary.delete()
 
         return final_eccentricity - self.system.eccentricity
 #pylint: enable=too-few-public-methods
+
+def format_evolution(binary, interpolator):
+    """Create the final result for find_evolution given an evolved binary."""
+
+    evolution_quantities = ['age',
+                            'semimajor',
+                            'eccentricity',
+                            'envelope_angmom',
+                            'core_angmom',
+                            'wind_saturation']
+    evolution = binary.get_evolution(evolution_quantities)
+    #False positive
+    #pylint: disable=no-member
+    evolution.orbital_period = binary.orbital_period(evolution.semimajor)
+    evolution.rstar = interpolator(
+        'radius',
+        binary.primary.mass,
+        binary.primary.metallicity
+    )(
+        evolution.age
+    )
+    evolution.luminosity = interpolator(
+        'lum',
+        binary.primary.mass,
+        binary.primary.metallicity
+    )(
+        evolution.age
+    )
+    #pylint: enable=no-member
+    result_quantities = ['age',
+                         'semimajor',
+                         'eccentricity',
+                         'orbital_period',
+                         'luminosity',
+                         'rstar']
+    #False positive
+    #pylint: disable=no-member
+    result = scipy.empty(len(evolution.age),
+                         dtype=[(q, 'f8') for q in result_quantities])
+    #pylint: enable=no-member
+    for quantity in result_quantities:
+        result[quantity] = getattr(evolution, quantity)
+    return result
 
 def find_evolution(system,
                    interpolator,
@@ -264,17 +347,14 @@ def find_evolution(system,
         system:    The system parameters. Usually parsed using
             read_hatsouth_info.
 
-        interpolator:    A stellar evolution interpolator to use. Usually from
-            get_interpolator.
+        interpolator:    See interpolator argument to
+            EccentricitySolverCallable.__init__().
 
         primary_lgq:    The log10 of the tidal quality factor to assume for the
             primary.
 
-        primary_lgq:    The log10 of the tidal quality factor to assume for the
-            secondary.
-
-        current_age:    The current system age at which the system parameters
-            are known.
+        secondary_lgq:    The log10 of the tidal quality factor to assume for
+            the secondary.
 
         max_age:    The maximum age up to which to calculate the evolution. If
             not specified, defaults to 1.1 * current_age.
@@ -289,24 +369,32 @@ def find_evolution(system,
         evolved.
     """
 
-
     #False positive
     #pylint: disable=no-member
-    star_period = (2.0 * scipy.pi * system.Rstar
-                   /
-                   system.Vsini).to(units.day).value
+    secondary_star = (system.Msecondary > 0.05 * units.M_sun)
+    print('System: '+ system.format())
+    if hasattr(system, 'Pprimary'):
+        primary_period = system.Pprimary
+    else:
+        primary_period = (2.0 * scipy.pi * system.Rstar
+                          /
+                          system.Vsini)
+    disk_dissipation_age = 0.01 * units.Gyr
+    max_timestep = 1e-3 * units.Gyr
     #pylint: enable=no-member
-    disk_dissipation_age = 0.01
-    max_timestep = 1e-3
     e_solver_callable = EccentricitySolverCallable(
         system=system,
         interpolator=interpolator,
+        #False positive
+        #pylint: disable=no-member
         current_age=system.age,
-        star_period=star_period,
+        #pylint: enable=no-member
+        primary_period=primary_period,
         disk_dissipation_age=disk_dissipation_age,
         max_timestep=max_timestep,
         primary_lgq=primary_lgq,
-        secondary_lgq=secondary_lgq
+        secondary_lgq=secondary_lgq,
+        secondary_star=secondary_star
     )
     if initial_eccentricity == 'solve':
         initial_eccentricity = scipy.optimize.brentq(e_solver_callable,
@@ -316,57 +404,41 @@ def find_evolution(system,
                                                      rtol=1e-2)
     e_solver_callable(initial_eccentricity)
 
-    star = create_star(system.Mprimary, system.feh, interpolator, primary_lgq)
-    planet = create_planet(system.Msecondary, system.Rsecondary, secondary_lgq)
-    binary = create_system(star,
-                           planet,
-                           disk_lock_period=e_solver_callable.psurf_initial,
-                           porb_initial=e_solver_callable.porb_initial,
-                           disk_dissipation_age=disk_dissipation_age,
-                           initial_eccentricity=initial_eccentricity)
+    primary = create_star(system.Mprimary,
+                          system.feh,
+                          e_solver_callable.interpolator['primary'],
+                          primary_lgq)
+
+    if secondary_star:
+        secondary = create_star(system.Msecondary,
+                                system.feh,
+                                e_solver_callable.interpolator['secondary'],
+                                secondary_lgq)
+    else:
+        secondary = create_planet(system.Msecondary,
+                                  system.Rsecondary,
+                                  secondary_lgq)
+    binary = create_system(
+        primary,
+        secondary,
+        disk_lock_period=e_solver_callable.psurf_initial,
+        porb_initial=e_solver_callable.porb_initial,
+        disk_dissipation_age=disk_dissipation_age,
+        initial_eccentricity=initial_eccentricity
+    )
     binary.evolve(
         #False positive
         #pylint: disable=no-member
-        max_age or 1.1 * system.age.to(units.Gyr).value,
+        (max_age or 1.1 * system.age).to(units.Gyr).value,
+        max_timestep.to(units.Gyr).value,
         #pylint: enable=no-member
-        max_timestep,
         1e-6,
-        None
+        None,
+        True
     )
 
-    evolution_quantities = ['age',
-                            'semimajor',
-                            'eccentricity',
-                            'envelope_angmom',
-                            'core_angmom',
-                            'wind_saturation']
-    evolution = binary.get_evolution(evolution_quantities)
-    #False positive
-    #pylint: disable=no-member
-    evolution.orbital_period = binary.orbital_period(evolution.semimajor)
-    evolution.rstar = interpolator('radius',
-                                   system.Mstar,
-                                   system.FeH)(evolution.age)
-    evolution.luminosity = interpolator('lum',
-                                        system.Mstar,
-                                        system.FeH)(evolution.age)
-    #pylint: enable=no-member
-    star.delete()
-    planet.delete()
-    binary.delete()
-    result_quantities = ['age',
-                         'semimajor',
-                         'eccentricity',
-                         'orbital_period',
-                         'luminosity',
-                         'rstar']
-    #False positive
-    #pylint: disable=no-member
-    result = scipy.empty(len(evolution.age),
-                         dtype=[(q, 'f8') for q in result_quantities])
-    #pylint: enable=no-member
-    for quantity in result_quantities:
-        result[quantity] = getattr(evolution, quantity)
+    result = format_evolution(binary, e_solver_callable.interpolator['primary'])
+
     print(
         'Found evolution for primary lg(Q) = %s, secondary lg(Q) = %s with '
         'a0 = %s'
@@ -381,4 +453,9 @@ def find_evolution(system,
             )
         )
     )
+
+    primary.delete()
+    secondary.delete()
+    binary.delete()
+
     return result
