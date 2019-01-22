@@ -32,6 +32,7 @@ def create_planet(mass, radius, lgq=None):
         #pylint: enable=no-member
     )
     if lgq is not None:
+        print('Setting secondary phase lag to ' + repr(phase_lag(lgq)))
         planet.set_dissipation(
             tidal_frequency_breaks=None,
             spin_frequency_breaks=None,
@@ -79,6 +80,7 @@ def create_star(mass,
     print('Core formation age = ' + repr(star.core_formation_age()))
     star.select_interpolation_region(star.core_formation_age())
     if lgq is not None:
+        print('Setting primary phase lag to ' + repr(phase_lag(lgq)))
         star.set_dissipation(zone_index=0,
                              tidal_frequency_breaks=None,
                              spin_frequency_breaks=None,
@@ -184,7 +186,8 @@ class EccentricitySolverCallable:
                  max_timestep,
                  primary_lgq,
                  secondary_lgq,
-                 secondary_star=False):
+                 secondary_star=False,
+                 orbital_period_tolerance=1e-6):
         """
         Get ready for the solver.
 
@@ -230,10 +233,11 @@ class EccentricitySolverCallable:
             max_timestep=max_timestep.to(units.Gyr).value,
             #pylint: enable=no-member
             primary_lgQ=primary_lgq,
-            secondary_lgQ=secondary_lgq
+            secondary_lgQ=secondary_lgq,
+            orbital_period_tolerance=orbital_period_tolerance
         )
         self.porb_initial = None
-        self.psurf_initial = None
+        self.psurf = None
         self.secondary_star = secondary_star
 
     def __call__(self, initial_eccentricity):
@@ -245,8 +249,9 @@ class EccentricitySolverCallable:
         of this function is the difference between the present day eccentricity
         predicted by that evolution and the measured value supplied at
         construction through the system argument. In addition, the initial
-        orbital period and stellar spin period are stored in the
-        :attr:porb_initial and :attr:psurf_initial attributes.
+        orbital period and (initial or final, depending on which is not
+        specified) stellar spin period are stored in the
+        :attr:porb_initial and :attr:psurf attributes.
 
         Args:
             initial_eccentricity(float):    The initial eccentricity with which
@@ -261,7 +266,10 @@ class EccentricitySolverCallable:
         find_ic = InitialConditionSolver(
             disk_dissipation_age=self.configuration['disk_dissipation_age'],
             evolution_max_time_step=self.configuration['max_timestep'],
-            initial_eccentricity=initial_eccentricity
+            initial_eccentricity=initial_eccentricity,
+            orbital_period_tolerance=(
+                self.configuration['orbital_period_tolerance']
+            )
         )
         primary = create_star(
             self.system.Mprimary,
@@ -284,13 +292,13 @@ class EccentricitySolverCallable:
                 self.system.Rsecondary,
                 self.configuration['secondary_lgQ']
             )
-        self.porb_initial, self.psurf_initial = find_ic(self.target_state,
-                                                        primary,
-                                                        secondary)
+        self.porb_initial, self.psurf = find_ic(self.target_state,
+                                                primary,
+                                                secondary)
         #False positive
         #pylint: disable=no-member
         self.porb_initial *= units.day
-        self.psurf_initial *= units.day
+        self.psurf *= units.day
         final_eccentricity = find_ic.binary.final_state().eccentricity
         #pylint: enable=no-member
         print('Final eccentricity: ' + repr(final_eccentricity))
@@ -330,21 +338,39 @@ def format_evolution(binary, interpolators, secondary_star):
                 feh=getattr(binary, component).metallicity
             )
 
-
         for quantity_name in ['radius', 'lum', 'iconv', 'irad']:
+            print('Start params: ' + repr(star_params))
             quantity = interpolators[component](
                 quantity_name,
                 **star_params
             )
+            print(quantity_name + ' age range: ' + repr((quantity.min_age,
+                                                         quantity.max_age)))
             values = scipy.full(evolution.age.shape, scipy.nan)
             valid_ages = scipy.logical_and(
-                evolution.age > quantity.min_age,
-                evolution.age < quantity.max_age
+                evolution.age > quantity.min_age * 2.0,
+                evolution.age < quantity.max_age / 2.0
             )
             values[valid_ages] = quantity(evolution.age[valid_ages])
             setattr(evolution,
                     component + '_' + quantity_name,
                     values)
+            if quantity_name in ['iconv', 'irad']:
+                print(
+                    'Setting ' + component + '_' + quantity_name + '_' + 'star'
+                )
+                print('At ages: ' + repr(evolution.age[valid_ages]))
+                values[valid_ages] = getattr(
+                    getattr(binary, component),
+                    (
+                        ('envelope' if quantity_name == 'iconv' else 'core')
+                        +
+                        '_inertia'
+                    )
+                )(evolution.age[valid_ages])
+                setattr(evolution,
+                        component + '_' + quantity_name + '_' + 'star',
+                        values)
 
     return evolution
 
@@ -354,7 +380,8 @@ def find_evolution(system,
                    primary_lgq=None,
                    secondary_lgq=None,
                    max_age=None,
-                   initial_eccentricity=0.0):
+                   initial_eccentricity=0.0,
+                   orbital_period_tolerance=1e-6):
     """
     Find the evolution of the given system.
 
@@ -409,7 +436,8 @@ def find_evolution(system,
         max_timestep=max_timestep,
         primary_lgq=primary_lgq,
         secondary_lgq=secondary_lgq,
-        secondary_star=secondary_star
+        secondary_star=secondary_star,
+        orbital_period_tolerance=orbital_period_tolerance
     )
     if initial_eccentricity == 'solve':
         initial_eccentricity = scipy.optimize.brentq(e_solver_callable,
@@ -435,10 +463,18 @@ def find_evolution(system,
         secondary = create_planet(system.Msecondary,
                                   system.Rsecondary,
                                   secondary_lgq)
+    print('Final evolution based on: ')
+    print('\tM1 = ' + repr(primary.mass))
+    print('\tM2 = ' + repr(secondary.mass))
+    print('\tPdisk = ' + repr(primary_period.to('d').value))
+    print('\tPorb initial = '
+          +
+          repr(e_solver_callable.porb_initial.to('d').value))
+    print('\teccentricity = ' + repr(initial_eccentricity))
     binary = create_system(
         primary,
         secondary,
-        disk_lock_period=e_solver_callable.psurf_initial,
+        disk_lock_period=primary_period,
         porb_initial=e_solver_callable.porb_initial,
         disk_dissipation_age=disk_dissipation_age,
         initial_eccentricity=initial_eccentricity
