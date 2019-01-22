@@ -118,6 +118,8 @@ def create_system(primary,
             The binary system ready to evolve.
     """
 
+    #False positive
+    #pylint: disable=no-member
     binary = Binary(
         primary=primary,
         secondary=secondary,
@@ -130,6 +132,7 @@ def create_system(primary,
         disk_dissipation_age=disk_dissipation_age.to(units.Gyr).value,
         secondary_formation_age=disk_dissipation_age.to(units.Gyr).value
     )
+    #pylint: enable=no-member
     binary.configure(age=primary.core_formation_age(),
                      semimajor=float('nan'),
                      eccentricity=float('nan'),
@@ -144,9 +147,15 @@ def create_system(primary,
         initial_inclination = None
         initial_periapsis = None
     secondary.configure(
+        #False positive
+        #pylint: disable=no-member
         age=disk_dissipation_age.to(units.Gyr).value,
+        #pylint: enable=no-member
         companion_mass=primary.mass,
+        #False positive
+        #pylint: disable=no-member
         semimajor=binary.semimajor(porb_initial.to(units.day).value),
+        #pylint: enable=no-member
         eccentricity=initial_eccentricity,
         spin_angmom=scipy.array([0.0, 0.0]),
         inclination=initial_inclination,
@@ -265,7 +274,9 @@ class EccentricitySolverCallable:
                 self.system.Msecondary,
                 self.system.feh,
                 self.interpolator['secondary'],
-                self.configuration['secondary_lgQ']
+                self.configuration['secondary_lgQ'],
+                wind_strength=0.0,
+                wind_saturation_frequency=1e10,
             )
         else:
             secondary = create_planet(
@@ -290,48 +301,52 @@ class EccentricitySolverCallable:
         return final_eccentricity - self.system.eccentricity
 #pylint: enable=too-few-public-methods
 
-def format_evolution(binary, interpolator):
+def format_evolution(binary, interpolators, secondary_star):
     """Create the final result for find_evolution given an evolved binary."""
 
-    evolution_quantities = ['age',
-                            'semimajor',
-                            'eccentricity',
-                            'envelope_angmom',
-                            'core_angmom',
-                            'wind_saturation']
-    evolution = binary.get_evolution(evolution_quantities)
+    evolution = binary.get_evolution()
     #False positive
     #pylint: disable=no-member
     evolution.orbital_period = binary.orbital_period(evolution.semimajor)
-    evolution.rstar = interpolator(
-        'radius',
-        binary.primary.mass,
-        binary.primary.metallicity
-    )(
-        evolution.age
-    )
-    evolution.luminosity = interpolator(
-        'lum',
-        binary.primary.mass,
-        binary.primary.metallicity
-    )(
-        evolution.age
-    )
-    #pylint: enable=no-member
-    result_quantities = ['age',
-                         'semimajor',
-                         'eccentricity',
-                         'orbital_period',
-                         'luminosity',
-                         'rstar']
-    #False positive
-    #pylint: disable=no-member
-    result = scipy.empty(len(evolution.age),
-                         dtype=[(q, 'f8') for q in result_quantities])
-    #pylint: enable=no-member
-    for quantity in result_quantities:
-        result[quantity] = getattr(evolution, quantity)
-    return result
+
+    components_to_get = ['primary']
+    if secondary_star:
+        components_to_get.append('secondary')
+
+    for component in components_to_get:
+
+        if (
+                len(interpolators[component].track_masses) == 1
+                and
+                len(interpolators[component].track_feh) == 1
+        ):
+            star_params = dict(
+                mass=interpolators[component].track_masses[0],
+                feh=interpolators[component].track_feh[0]
+            )
+        else:
+            star_params = dict(
+                mass=getattr(binary, component).mass,
+                feh=getattr(binary, component).metallicity
+            )
+
+
+        for quantity_name in ['radius', 'lum', 'iconv', 'irad']:
+            quantity = interpolators[component](
+                quantity_name,
+                **star_params
+            )
+            values = scipy.full(evolution.age.shape, scipy.nan)
+            valid_ages = scipy.logical_and(
+                evolution.age > quantity.min_age,
+                evolution.age < quantity.max_age
+            )
+            values[valid_ages] = quantity(evolution.age[valid_ages])
+            setattr(evolution,
+                    component + '_' + quantity_name,
+                    values)
+
+    return evolution
 
 def find_evolution(system,
                    interpolator,
@@ -413,7 +428,9 @@ def find_evolution(system,
         secondary = create_star(system.Msecondary,
                                 system.feh,
                                 e_solver_callable.interpolator['secondary'],
-                                secondary_lgq)
+                                secondary_lgq,
+                                wind_strength=0.0,
+                                wind_saturation_frequency=1e10)
     else:
         secondary = create_planet(system.Msecondary,
                                   system.Rsecondary,
@@ -429,7 +446,7 @@ def find_evolution(system,
     binary.evolve(
         #False positive
         #pylint: disable=no-member
-        (max_age or 1.1 * system.age).to(units.Gyr).value,
+        (max_age or system.age).to(units.Gyr).value,
         max_timestep.to(units.Gyr).value,
         #pylint: enable=no-member
         1e-6,
@@ -437,22 +454,9 @@ def find_evolution(system,
         True
     )
 
-    result = format_evolution(binary, e_solver_callable.interpolator['primary'])
-
-    print(
-        'Found evolution for primary lg(Q) = %s, secondary lg(Q) = %s with '
-        'a0 = %s'
-        %
-        (
-            repr(primary_lgq),
-            repr(secondary_lgq),
-            repr(
-                next(
-                    filter(lambda a: not scipy.isnan(a), result['semimajor'])
-                )
-            )
-        )
-    )
+    result = format_evolution(binary,
+                              e_solver_callable.interpolator,
+                              secondary_star)
 
     primary.delete()
     secondary.delete()
