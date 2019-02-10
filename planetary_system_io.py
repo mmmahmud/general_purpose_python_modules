@@ -11,6 +11,7 @@ import csv
 from glob import glob
 import re
 
+from ast import literal_eval
 import numpy
 from astropy.units import Unit
 
@@ -407,13 +408,17 @@ def read_hatsouth_info(info_filename):
                 definition = line.split('#')[0]
                 name, value_str = definition.split('=')
 
-                value_str = value_str.split()
-                assert len(value_str) >= 1
+                value_str = value_str.strip()
+                if value_str[0] == '[' and value_str[-1] == ']':
+                    value = literal_eval(value_str)
+                else:
+                    value_str = value_str.split()
+                    assert len(value_str) >= 1
 
-                try:
-                    value = float(value_str[0])
-                except ValueError:
-                    value = value_str[0]
+                    try:
+                        value = float(value_str[0])
+                    except ValueError:
+                        value = value_str[0]
 
                 #False positive, pylint does not see attributes
                 #defined in __new__
