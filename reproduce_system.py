@@ -345,7 +345,11 @@ class EccentricitySolverCallable:
             semimajor=binary.semimajor(porb_initial),
             #pylint: enable=no-member
             eccentricity=initial_eccentricity,
-            spin_angmom=scipy.array([0.08, 0.0]),
+            spin_angmom=(
+                scipy.array([0.08, 0.0])
+                if isinstance(secondary, EvolvingStar) else
+                scipy.array([0.0])
+            ),
             inclination=initial_inclination,
             periapsis=initial_periapsis,
             locked_surface=False,
@@ -658,7 +662,8 @@ def find_evolution(system,
                    secondary_wind_saturation=100.0,
                    secondary_core_envelope_coupling_timescale=0.05,
                    orbital_period_tolerance=1e-6,
-                   solve=True):
+                   solve=True,
+                   **extra_evolve_args):
     """
     Find the evolution of the given system.
 
@@ -704,6 +709,8 @@ def find_evolution(system,
         solve:    If False, no attempt is made to find initial orbital period
             and/or eccentricity. Instead, the system parameters are assumed to
             be initial values.
+
+        extra_evolve_args:    Any extra arguments to pass to Binary.evolve().
 
     Returns:
         A structure with attributes containing the evolutions of orbital and
@@ -761,5 +768,6 @@ def find_evolution(system,
         e_solver_callable.porb_initial = system.Porb
 
     return e_solver_callable.get_found_evolution(initial_eccentricity,
-                                                 max_age)
+                                                 max_age,
+                                                 **extra_evolve_args)
 #pylint: enable=too-many-locals
