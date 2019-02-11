@@ -47,7 +47,7 @@ def add_dissipation_cmdline(parser, lgq_suffixes=('primary', 'secondary')):
             'Default: %%(default)s.' % dict(suffix=component)
         )
         parser.add_argument(
-            prefix + 'wtide-dependence',
+            prefix + '-wtide-dependence',
             nargs='+',
             type=float,
             default=[],
@@ -62,7 +62,7 @@ def add_dissipation_cmdline(parser, lgq_suffixes=('primary', 'secondary')):
             'indices for frequencies higher than the break.'
         )
         parser.add_argument(
-            prefix + 'wspin-dependence',
+            prefix + '-wspin-dependence',
             nargs='+',
             type=float,
             default=[],
@@ -156,8 +156,8 @@ def create_planet(mass,
     planet = LockedPlanet(
         #False positive
         #pylint: disable=no-member
-        mass=mass(units.M_sun).value,
-        radius=radius(units.R_sun).value
+        mass=mass.to(units.M_sun).value,
+        radius=radius.to(units.R_sun).value
         #pylint: enable=no-member
     )
     if dissipation is not None:
