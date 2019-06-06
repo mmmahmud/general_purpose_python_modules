@@ -439,9 +439,9 @@ class EccentricitySolverCallable:
                             '_inertia'
                         )
                     )(evolution.age[valid_ages])
-                    setattr(evolution,
-                            component + '_' + quantity_name,
-                            values)
+                setattr(evolution,
+                        component + '_' + quantity_name,
+                        values)
 
         return evolution
 
