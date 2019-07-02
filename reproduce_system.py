@@ -601,7 +601,7 @@ class EccentricitySolverCallable:
                 the current state.
 
             max_age:    The age up to which to calculate the evolution. If None
-                (default), the system age is used.
+                (default), the star lifetime is used.
 
             evolve_kwargs:    Additional keyword arguments to pass to
                 Binary.evolve()
@@ -621,10 +621,16 @@ class EccentricitySolverCallable:
             #pylint: enable=no-member
             initial_eccentricity=initial_eccentricity
         )
+        if max_age is None:
+            if isinstance(primary, EvolvingStar):
+                max_age = primary.lifetime()
+            else:
+                max_age = self.system.age
+
         binary.evolve(
             #False positive
             #pylint: disable=no-member
-            (max_age or self.system.age).to(units.Gyr).value,
+            max_age.to(units.Gyr).value,
             self.configuration['max_timestep'],
             #pylint: enable=no-member
             1e-6,
@@ -684,7 +690,7 @@ def find_evolution(system,
             the secondary.
 
         max_age:    The maximum age up to which to calculate the evolution. If
-            not specified, defaults to 1.1 * current_age.
+            not specified, defaults to star's lifetime.
 
         initial_eccentricity:    The initial eccentricity to star the evolution
             with. If set to the string 'solve' an attempt is made to find an
