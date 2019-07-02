@@ -625,12 +625,14 @@ class EccentricitySolverCallable:
             if isinstance(primary, EvolvingStar):
                 max_age = primary.lifetime()
             else:
-                max_age = self.system.age
+                max_age = (self.system.age).to(units.Gyr).value
+        else:
+            max_age = max_age.to(units.Gyr).value
 
         binary.evolve(
             #False positive
             #pylint: disable=no-member
-            max_age.to(units.Gyr).value,
+            max_age,
             self.configuration['max_timestep'],
             #pylint: enable=no-member
             1e-6,
