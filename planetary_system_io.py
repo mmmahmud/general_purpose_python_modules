@@ -6,14 +6,13 @@
 
 """IO operations for planetary system parameters."""
 
-
 import csv
 from glob import glob
 import re
 
 from ast import literal_eval
 import numpy
-from astropy.units import Unit
+from astropy.units import Unit, Quantity
 
 from manual_exoplanet_data import data as manual_data
 
@@ -230,6 +229,30 @@ def read_ages(nasa_planets,
     read_file(age_file_manual_density, age_file_columns)
     read_file(manual_densities, density_file_columns)
 
+def convert_nasa_unit_to_astropy(unit_str):
+    """Return the astropy unit matching the one specified in input file."""
+
+    if unit_str in ['days', 'hrs']:
+        unit_str = unit_str[:-1]
+    elif unit_str == 'decimal degrees':
+        unit_str = 'degree'
+    elif (
+            unit_str in ['dex', 'Earth flux', 'sexagesimal']
+            or
+            unit_str.startswith('log10(')
+            or
+            unit_str.startswith('log(')
+    ):
+        return None
+    elif unit_str.endswith(' mass'):
+        unit_str = unit_str.split()[0].lower() + 'Mass'
+    elif unit_str.endswith(' radii'):
+        unit_str = unit_str.split()[0].lower() + 'Rad'
+    elif unit_str.startswith('percent'):
+        return 0.01
+
+    return Unit(unit_str)
+
 #Sufficient internal structure ensures simple enough code units.
 #pylint: disable=too-many-locals
 def read_nasa_planets(csv_filename,
@@ -238,7 +261,8 @@ def read_nasa_planets(csv_filename,
                                  'PSR J1719-1438',
                                  'K2-22'),
                       fill_missing=manual_data,
-                      need_ages=True):
+                      need_ages=True,
+                      add_units=False):
     """
     Read a CSV file downloaded from the NASA Exoplanet Archive to a dict.
 
@@ -247,10 +271,8 @@ def read_nasa_planets(csv_filename,
             http://exoplanetarchive.ipac.caltech.edu.
 
     Returns:
-        A dictionary with keys the column names in the input file and
-        values being structures with attributes unit, giving the units
-        specified in the input file and values, all the entries in the
-        column converted to floating point values if appropriate.
+        A structure with the column names as attributes containing the
+        corresponding values properly formatted.
     """
 
     def do_eliminate():
@@ -276,10 +298,15 @@ def read_nasa_planets(csv_filename,
                 if hasattr(result, quantity):
                     getattr(result, quantity)[fill_index] = value
 
-    data = numpy.genfromtxt(csv_filename,
-                            delimiter=',',
-                            comments='#',
-                            dtype=None)
+
+    with open(csv_filename, 'r') as csv_file:
+        while csv_file.readline()[0] == '#':
+            data_start = csv_file.tell()
+        csv_file.seek(data_start)
+        data = numpy.genfromtxt(csv_file,
+                                delimiter=',',
+                                dtype=None,
+                                comments=None)
 
     data_columns = [col.decode() for col in data[0]]
     if eliminate:
@@ -297,6 +324,13 @@ def read_nasa_planets(csv_filename,
             column_name = entries[2].strip(':')
             column_index = data_columns.index(column_name)
             column_values = data[:, column_index][1:]
+            if add_units:
+                if entries[-1][0] == '[' and entries[-1][-1] == ']':
+                    column_units = convert_nasa_unit_to_astropy(
+                        entries[-1][1:-1]
+                    )
+                else:
+                    column_units = None
             if (
                     column_name in ['pl_hostname',
                                     'pl_name',
@@ -324,12 +358,17 @@ def read_nasa_planets(csv_filename,
                 column_values = [v.decode() for v in column_values]
             else:
                 print('column_name: ' + repr(column_name))
-                column_values = [numpy.nan if v == b'' else float(v)
-                                 for v in data[:, column_index][1:]]
+                column_values = [
+                    numpy.nan if v == b'' else float(v)
+                    for v in data[:, column_index][1:]
+                ]
+            column_values = numpy.array(column_values)
+            if add_units and column_units is not None:
+                column_values *= column_units
             setattr(
                 result,
                 column_name,
-                numpy.array(column_values).view(ArrayWithAttributes)
+                column_values.view(ArrayWithAttributes)
             )
             column_name_list.append(column_name)
 
@@ -385,6 +424,64 @@ class FloatWithErrors(float):
             repr(self.minus_error)
             #pylint: enable=no-member
         )
+
+#We wish to keep this an abstract class.
+#pylint: disable=abstract-method
+class QuantityWithErrors(Quantity):
+    """Subclass astropy's Quantity to add plus_error and minus_error attr."""
+
+    #We need to define a new contructor signature.
+    #pylint: disable=signature-differs
+    def __new__(cls, value_str):
+        """Parse a string like 5 +1 -4 m or 5 +/- 1 kg to Quantity w/ errors."""
+
+        value_str = value_str.strip()
+        if value_str[0] == '[' and value_str[-1] == ']':
+            value = literal_eval(value_str)
+        else:
+            value_str = value_str.split()
+            assert len(value_str) >= 1
+
+            try:
+                value = float(value_str[0])
+            except ValueError:
+                value = value_str[0]
+
+        #False positive, pylint does not see attributes
+        #defined in __new__
+        #pylint: disable=attribute-defined-outside-init
+        if isinstance(value, float):
+            if len(value_str) != 1:
+                if len(value_str) == 4:
+                    unit = Unit(value_str[3])
+                else:
+                    unit = Unit('')
+
+                if value_str[1] == '+/-':
+                    plus_error = float(value_str[2])
+                    minus_error = plus_error
+                else:
+                    plus_error = float(value_str[1])
+                    minus_error = abs(float(value_str[2]))
+        result = super().__new__(cls, value, unit)
+        result.plus_error = plus_error
+        result.minus_error = minus_error
+        return result
+    #pylint: enable=signature-differs
+
+    def __repr__(self):
+        """Return string showing the value and errors."""
+
+        return '%s +%s -%s %s' %(
+            repr(self.value),
+            #False positive, pylind does not see members created by __new__
+            #pylint: disable=no-member
+            repr(self.plus_error),
+            repr(self.minus_error),
+            str(self.unit)
+            #pylint: enable=no-member
+        )
+#pylint: enable=abstract-method
 
 def read_hatsouth_info(info_filename):
     """
