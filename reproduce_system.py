@@ -240,14 +240,24 @@ def get_interpolator(stellar_evolution_interpolator_dir,
 
 #This does serve the purpose of a single function to pass to a solver.
 #pylint: disable=too-few-public-methods
-class EccentricitySolverCallable:
-    """Callable to pass to a solver to find the initial eccentricity."""
+class PeriodSolverWrapper:
+    """Provide methods to pass to a solver for initial ecc. or obliquity."""
 
     def _create_system_components(self):
         """Create the two objects comprising the system to evolve."""
 
+        mprimary=getattr(self.system,
+                         'Mprimary',
+                         self.system.primary_mass)
+        msecondary=getattr(self.system,
+                           'Msecondary',
+                           self.system.secondary_mass)
+        rsecondary=getattr(self.system,
+                           'Rsecondary',
+                           self.system.secondary_radius)
+
         primary = create_star(
-            self.system.Mprimary,
+            mprimary,
             self.system.feh,
             self.interpolator['primary'],
             self.configuration['dissipation']['primary'],
@@ -261,7 +271,7 @@ class EccentricitySolverCallable:
         )
         if self.secondary_star:
             secondary = create_star(
-                self.system.Msecondary,
+                msecondary,
                 self.system.feh,
                 self.interpolator['secondary'],
                 self.configuration['dissipation']['secondary'],
@@ -275,8 +285,8 @@ class EccentricitySolverCallable:
             )
         else:
             secondary = create_planet(
-                self.system.Msecondary,
-                self.system.Rsecondary,
+                msecondary,
+                rsecondary,
                 self.configuration['dissipation']['secondary']
             )
         return primary, secondary
@@ -286,7 +296,8 @@ class EccentricitySolverCallable:
                        secondary,
                        *,
                        porb_initial,
-                       initial_eccentricity=0.0):
+                       initial_eccentricity,
+                       initial_obliquity):
         """
         Create the system to evolve from the two bodies (primary & secondary).
 
@@ -301,6 +312,9 @@ class EccentricitySolverCallable:
 
             initial_eccentricity:    The initial eccentricity of the system.
 
+            initial_obliquity:     The initial obliquity to assume for the
+                system in rad.
+
         Returns:
             Binary:
                 The binary system ready to evolve.
@@ -313,7 +327,7 @@ class EccentricitySolverCallable:
             secondary=secondary,
             initial_orbital_period=porb_initial,
             initial_eccentricity=initial_eccentricity,
-            initial_inclination=0.0,
+            initial_inclination=initial_obliquity,
             disk_lock_frequency=(2.0 * scipy.pi
                                  /
                                  self.target_state.Pdisk),
@@ -329,10 +343,10 @@ class EccentricitySolverCallable:
                          periapsis=None,
                          evolution_mode='LOCKED_SURFACE_SPIN')
         if isinstance(secondary, EvolvingStar):
-            initial_inclination = scipy.array([0.0])
+            initial_obliquity = scipy.array([0.0])
             initial_periapsis = scipy.array([0.0])
         else:
-            initial_inclination = None
+            initial_obliquity = None
             initial_periapsis = None
         secondary.configure(
             #False positive
@@ -350,7 +364,7 @@ class EccentricitySolverCallable:
                 if isinstance(secondary, EvolvingStar) else
                 scipy.array([0.0])
             ),
-            inclination=initial_inclination,
+            inclination=initial_obliquity,
             periapsis=initial_periapsis,
             locked_surface=False,
             zero_outer_inclination=True,
@@ -439,11 +453,43 @@ class EccentricitySolverCallable:
                             '_inertia'
                         )
                     )(evolution.age[valid_ages])
+                else:
+                    values[valid_ages] = quantity(evolution.age[valid_ages])
                 setattr(evolution,
                         component + '_' + quantity_name,
                         values)
 
         return evolution
+
+    def _get_final_state(self, initial_eccentricity, initial_obliquity):
+        """Return the final state of the system given initial conditions."""
+
+        find_ic = InitialConditionSolver(
+            disk_dissipation_age=self.configuration['disk_dissipation_age'],
+            evolution_max_time_step=self.configuration['max_timestep'],
+            initial_eccentricity=initial_eccentricity,
+            initial_inclination=initial_obliquity,
+            orbital_period_tolerance=(
+                self.configuration['orbital_period_tolerance']
+            )
+        )
+        primary, secondary = self._create_system_components()
+        self.porb_initial, self.psurf = find_ic(self.target_state,
+                                                primary,
+                                                secondary)
+        #False positive
+        #pylint: disable=no-member
+        self.porb_initial *= units.day
+        self.psurf *= units.day
+
+        result = find_ic.binary.final_state()
+
+        primary.delete()
+        secondary.delete()
+        find_ic.binary.delete()
+
+        return result
+
 
     def __init__(self,
                  system,
@@ -451,7 +497,7 @@ class EccentricitySolverCallable:
                  *,
                  current_age,
                  disk_period,
-                 initial_inclination,
+                 initial_obliquity,
                  disk_dissipation_age,
                  max_timestep,
                  dissipation,
@@ -475,7 +521,7 @@ class EccentricitySolverCallable:
 
             disk_period: The period at which the primaly will initially spin.
 
-            initial_inclination:    The initial inclination of all zones
+            initial_obliquity:    The initial inclination of all zones
                 of the primary relative to the orbit in which the secondary
                 forms.
 
@@ -504,7 +550,9 @@ class EccentricitySolverCallable:
             #False positive
             #pylint: disable=no-member
             age=current_age.to(units.Gyr).value,
-            Porb=system.Porb.to(units.day).value,
+            Porb=getattr(system,
+                         'Porb',
+                         system.orbital_period).to(units.day).value,
             Pdisk=disk_period.to(units.day).value,
             planet_formation_age=disk_dissipation_age.to(units.Gyr).value
             #pylint: enable=no-member
@@ -524,7 +572,7 @@ class EccentricitySolverCallable:
             #pylint: enable=no-member
             orbital_period_tolerance=orbital_period_tolerance,
             dissipation=dissipation,
-            initial_inclination=initial_inclination,
+            initial_obliquity=initial_obliquity,
             primary_wind_strength=primary_wind_strength,
             primary_wind_saturation=primary_wind_saturation,
             primary_core_envelope_coupling_timescale=(
@@ -540,7 +588,7 @@ class EccentricitySolverCallable:
         self.psurf = None
         self.secondary_star = secondary_star
 
-    def __call__(self, initial_eccentricity):
+    def eccentricity_difference(self, initial_eccentricity):
         """
         Return the discrepancy in eccentricity for the given initial value.
 
@@ -563,34 +611,30 @@ class EccentricitySolverCallable:
                 eccentricity.
         """
 
-        find_ic = InitialConditionSolver(
-            disk_dissipation_age=self.configuration['disk_dissipation_age'],
-            evolution_max_time_step=self.configuration['max_timestep'],
+        final_eccentricity = self._get_final_state(
             initial_eccentricity=initial_eccentricity,
-            initial_inclination=self.configuration['initial_inclination'],
-            orbital_period_tolerance=(
-                self.configuration['orbital_period_tolerance']
-            )
-        )
-        primary, secondary = self._create_system_components()
-        self.porb_initial, self.psurf = find_ic(self.target_state,
-                                                primary,
-                                                secondary)
-        #False positive
-        #pylint: disable=no-member
-        self.porb_initial *= units.day
-        self.psurf *= units.day
-        final_eccentricity = find_ic.binary.final_state().eccentricity
+            initial_obliquity=self.system.obliquity
+        ).eccentricity
         #pylint: enable=no-member
         print('Final eccentricity: ' + repr(final_eccentricity))
-        primary.delete()
-        secondary.delete()
-        find_ic.binary.delete()
 
         return final_eccentricity - self.system.eccentricity
 
+    def obliquity_difference(self, initial_obliquity):
+        """Same as eccentricity_difference, but for obliquity."""
+
+        final_obliquity = self._get_final_state(
+            initial_eccentricity=self.system.eccentricity,
+            initial_obliquity=initial_obliquity
+        ).envelope_inclination
+        #pylint: enable=no-member
+        print('Final obliquity: ' + repr(final_obliquity))
+
+        return final_obliquity - self.system.obliquity
+
     def get_found_evolution(self,
                             initial_eccentricity,
+                            initial_obliquity,
                             max_age=None,
                             **evolve_kwargs):
         """
@@ -610,6 +654,8 @@ class EccentricitySolverCallable:
             See EccentricitySolverCallable._format_evolution().
         """
 
+        if self.porb_initial is None:
+            self._get_final_state(initial_eccentricity, initial_obliquity)
         primary, secondary = self._create_system_components()
 
         binary = self._create_system(
@@ -619,7 +665,8 @@ class EccentricitySolverCallable:
             #pylint: disable=no-member
             porb_initial=self.porb_initial.to(units.day).value,
             #pylint: enable=no-member
-            initial_eccentricity=initial_eccentricity
+            initial_eccentricity=initial_eccentricity,
+            initial_obliquity=initial_obliquity
         )
         if max_age is None:
             if isinstance(primary, EvolvingStar):
@@ -660,7 +707,7 @@ def find_evolution(system,
                    *,
                    max_age=None,
                    initial_eccentricity=0.0,
-                   initial_inclination=0.0,
+                   initial_obliquity=0.0,
                    disk_period=None,
                    disk_dissipation_age=2e-3 * units.Gyr,
                    primary_wind_strength=0.17,
@@ -699,8 +746,8 @@ def find_evolution(system,
             initial eccentricity to reproduce the present day value given in the
             system.
 
-        initial_inclination:    See same name argument to
-            EccentricitySolverCallable.__init__().
+        initial_obliquity:    See same name argument to
+            PeriodSolverWrapper.__init__().
 
         disk_period:    The spin period of the primary star's surface convective
             zone until the secondary appears.
@@ -728,18 +775,21 @@ def find_evolution(system,
 
     #False positive
     #pylint: disable=no-member
-    secondary_star = (system.Msecondary > 0.05 * units.M_sun)
-    print('System: '+ system.format())
+    secondary_star = (
+        getattr(system, 'Msecondary', system.secondary_mass)
+        >
+        0.05 * units.M_sun
+    )
     if disk_period is None:
         if hasattr(system, 'Pprimary'):
             disk_period = system.Pprimary
         else:
-            disk_period = (2.0 * scipy.pi * system.Rstar
+            disk_period = (2.0 * scipy.pi * system.Rsecondary
                            /
                            system.Vsini)
     max_timestep = 1e-3 * units.Gyr
     #pylint: enable=no-member
-    e_solver_callable = EccentricitySolverCallable(
+    period_solver = PeriodSolverWrapper(
         system=system,
         interpolator=interpolator,
         #False positive
@@ -747,7 +797,7 @@ def find_evolution(system,
         current_age=system.age,
         #pylint: enable=no-member
         disk_period=disk_period,
-        initial_inclination=initial_inclination,
+        initial_obliquity=initial_obliquity,
         disk_dissipation_age=disk_dissipation_age,
         max_timestep=max_timestep,
         dissipation=dissipation,
@@ -766,16 +816,28 @@ def find_evolution(system,
     )
     if solve:
         if initial_eccentricity == 'solve':
-            initial_eccentricity = scipy.optimize.brentq(e_solver_callable,
-                                                         system.eccentricity,
-                                                         0.5,
-                                                         xtol=1e-2,
-                                                         rtol=1e-2)
-        e_solver_callable(initial_eccentricity)
+            initial_eccentricity = scipy.optimize.brentq(
+                period_solver.eccentricity_difference,
+                system.eccentricity,
+                0.5,
+                xtol=1e-2,
+                rtol=1e-2
+            )
+        elif initial_obliquity == 'solve':
+            initial_obliquity = scipy.optimize.brentq(
+                period_solver.obliquity_difference,
+                0,
+                scipy.pi,
+                xtol=1e-3,
+                rtol=1e-3
+            )
     else:
-        e_solver_callable.porb_initial = system.Porb
+        period_solver.porb_initial = system.Porb
 
-    return e_solver_callable.get_found_evolution(initial_eccentricity,
-                                                 max_age,
-                                                 **extra_evolve_args)
+    return period_solver.get_found_evolution(
+        initial_eccentricity=initial_eccentricity,
+        initial_obliquity=initial_obliquity,
+        max_age=max_age,
+        **extra_evolve_args
+    )
 #pylint: enable=too-many-locals
