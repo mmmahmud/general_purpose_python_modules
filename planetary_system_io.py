@@ -232,6 +232,7 @@ def read_ages(nasa_planets,
 def convert_nasa_unit_to_astropy(unit_str):
     """Return the astropy unit matching the one specified in input file."""
 
+    print('Unit str: ' + repr(unit_str))
     if unit_str in ['days', 'hrs']:
         unit_str = unit_str[:-1]
     elif unit_str == 'decimal degrees':
@@ -244,12 +245,18 @@ def convert_nasa_unit_to_astropy(unit_str):
             unit_str.startswith('log(')
     ):
         return None
+    elif unit_str == 'Solar mass':
+        unit_str = 'solMass'
+    elif unit_str == 'Solar radii':
+        unit_str = 'solRad'
     elif unit_str.endswith(' mass'):
         unit_str = unit_str.split()[0].lower() + 'Mass'
     elif unit_str.endswith(' radii'):
         unit_str = unit_str.split()[0].lower() + 'Rad'
     elif unit_str.startswith('percent'):
         return 0.01
+
+    print('Converted to: ' + repr(unit_str))
 
     return Unit(unit_str)
 
@@ -296,7 +303,12 @@ def read_nasa_planets(csv_filename,
                 continue
             for quantity, value in fill_system.items():
                 if hasattr(result, quantity):
-                    getattr(result, quantity)[fill_index] = value
+                    target_column = getattr(result, quantity)
+                    if isinstance(target_column, Quantity):
+                        unit = target_column.unit
+                    else:
+                        unit = 1
+                    target_column[fill_index] = (value * unit)
 
 
     with open(csv_filename, 'r') as csv_file:
@@ -325,9 +337,9 @@ def read_nasa_planets(csv_filename,
             column_index = data_columns.index(column_name)
             column_values = data[:, column_index][1:]
             if add_units:
-                if entries[-1][0] == '[' and entries[-1][-1] == ']':
+                if entries[-1][-1] == ']':
                     column_units = convert_nasa_unit_to_astropy(
-                        entries[-1][1:-1]
+                        line.strip().rsplit('[', 1)[-1][:-1]
                     )
                 else:
                     column_units = None
@@ -364,11 +376,12 @@ def read_nasa_planets(csv_filename,
                 ]
             column_values = numpy.array(column_values)
             if add_units and column_units is not None:
+                print(column_name + ' units: ' + repr(column_units))
                 column_values *= column_units
             setattr(
                 result,
                 column_name,
-                column_values.view(ArrayWithAttributes)
+                column_values
             )
             column_name_list.append(column_name)
 
