@@ -330,7 +330,7 @@ def read_nasa_planets(csv_filename,
         for line in csv_file:
             if line[0] != '#':
                 continue
-            entries = line.strip().split()
+            entries = line.strip().rstrip(')').split()
             if len(entries) < 4 or entries[1] != 'COLUMN':
                 continue
             column_name = entries[2].strip(':')
@@ -339,7 +339,7 @@ def read_nasa_planets(csv_filename,
             if add_units:
                 if entries[-1][-1] == ']':
                     column_units = convert_nasa_unit_to_astropy(
-                        line.strip().rsplit('[', 1)[-1][:-1]
+                        line.strip().rstrip(')').rsplit('[', 1)[-1][:-1]
                     )
                 else:
                     column_units = None
@@ -375,8 +375,9 @@ def read_nasa_planets(csv_filename,
                     for v in data[:, column_index][1:]
                 ]
             column_values = numpy.array(column_values)
+
+            print(column_name + ' units: ' + repr(column_units))
             if add_units and column_units is not None:
-                print(column_name + ' units: ' + repr(column_units))
                 column_values *= column_units
             setattr(
                 result,
