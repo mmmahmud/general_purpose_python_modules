@@ -171,7 +171,8 @@ def create_star(mass,
                 *,
                 wind_strength=0.17,
                 wind_saturation_frequency=2.78,
-                diff_rot_coupling_timescale=5e-3):
+                diff_rot_coupling_timescale=5e-3,
+                interpolation_age=None):
     """
     Create the star to use in the evolution.
 
@@ -194,6 +195,9 @@ def create_star(mass,
         diff_rot_coupling_timescale:    See same name argument to
             EvolvingStar.__init__()
 
+        interpolation_age:    The age at which to initialize the interpolation
+            for the star. If `None`, the core formation age is used.
+
     Returns:
         EvolvingStar:
             The star in the system useable for calculating obital evolution.
@@ -209,7 +213,9 @@ def create_star(mass,
                         interpolator=interpolator)
     #pylint: enable=no-member
     print('Core formation age = ' + repr(star.core_formation_age()))
-    star.select_interpolation_region(star.core_formation_age())
+    star.select_interpolation_region(star.core_formation_age()
+                                     if interpolation_age is None else
+                                     interpolation_age)
     if dissipation is not None:
         star.set_dissipation(zone_index=0, **dissipation)
     return star
@@ -252,9 +258,6 @@ class PeriodSolverWrapper:
         msecondary=getattr(self.system,
                            'Msecondary',
                            self.system.secondary_mass)
-        rsecondary=getattr(self.system,
-                           'Rsecondary',
-                           self.system.secondary_radius)
 
         primary = create_star(
             mprimary,
@@ -281,12 +284,15 @@ class PeriodSolverWrapper:
                 ),
                 diff_rot_coupling_timescale=self.configuration[
                     'secondary_core_envelope_coupling_timescale'
-                ]
+                ],
+                interpolation_age=self.configuration['disk_dissipation_age']
             )
         else:
             secondary = create_planet(
                 msecondary,
-                rsecondary,
+                getattr(self.system,
+                        'Rsecondary',
+                        self.system.secondary_radius),
                 self.configuration['dissipation']['secondary']
             )
         return primary, secondary
@@ -360,7 +366,7 @@ class PeriodSolverWrapper:
             #pylint: enable=no-member
             eccentricity=initial_eccentricity,
             spin_angmom=(
-                scipy.array([0.08, 0.0])
+                scipy.array([0.01, 0.01])
                 if isinstance(secondary, EvolvingStar) else
                 scipy.array([0.0])
             ),
@@ -471,7 +477,8 @@ class PeriodSolverWrapper:
             initial_inclination=initial_obliquity,
             orbital_period_tolerance=(
                 self.configuration['orbital_period_tolerance']
-            )
+            ),
+            max_porb_initial=1000.0
         )
         primary, secondary = self._create_system_components()
         self.porb_initial, self.psurf = find_ic(self.target_state,
@@ -557,6 +564,9 @@ class PeriodSolverWrapper:
             planet_formation_age=disk_dissipation_age.to(units.Gyr).value
             #pylint: enable=no-member
         )
+        print('For system:\n\t' + repr(system))
+        print('Targeting:\n\t' + self.target_state.format('\n\t'))
+
         self.system = system
         if isinstance(interpolator, MESAInterpolator):
             self.interpolator = dict(primary=interpolator,
@@ -697,6 +707,15 @@ class PeriodSolverWrapper:
 
         return result
 
+def secondary_is_star(system):
+    """True iff the secondary in the system should be evolved as a star."""
+
+    return (
+        getattr(system, 'Msecondary', system.secondary_mass)
+        >
+        0.05 * units.M_sun
+    )
+
 #pylint: enable=too-few-public-methods
 
 #Unable to come up with refoctoring which does not decrease readability.
@@ -775,11 +794,6 @@ def find_evolution(system,
 
     #False positive
     #pylint: disable=no-member
-    secondary_star = (
-        getattr(system, 'Msecondary', system.secondary_mass)
-        >
-        0.05 * units.M_sun
-    )
     if disk_period is None:
         if hasattr(system, 'Pprimary'):
             disk_period = system.Pprimary
@@ -801,7 +815,7 @@ def find_evolution(system,
         disk_dissipation_age=disk_dissipation_age,
         max_timestep=max_timestep,
         dissipation=dissipation,
-        secondary_star=secondary_star,
+        secondary_star=secondary_is_star(system),
         primary_wind_strength=primary_wind_strength,
         primary_wind_saturation=primary_wind_saturation,
         primary_core_envelope_coupling_timescale=(
