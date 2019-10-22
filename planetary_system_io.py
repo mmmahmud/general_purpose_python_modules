@@ -700,6 +700,29 @@ def parse_hartman2016_stellar_params(filename):
 
     return result
 
+def read_cds_pipe_table(filename):
+    """Read a `|` separated table downloaded from CDS."""
+
+    def filtered_lines():
+        """Return only the lines that should be processed by genfromtxt."""
+
+        with open(filename, 'r') as cds_file:
+            for line in cds_file:
+                if(
+                        line[0] not in '#-'
+                        and
+                        line[:2] != ' |'
+                ):
+                    yield line
+
+    return numpy.genfromtxt(filtered_lines(),
+                            dtype=None,
+                            comments=None,
+                            delimiter='|',
+                            names=True,
+                            deletechars='',
+                            replace_space=' ')
+
 if __name__ == '__main__':
     stellar_params = parse_hartman2016_stellar_params(
         '../Scripts/inputs/versioned/'
