@@ -2,7 +2,7 @@
 
 import scipy
 
-_usno_to_sdss_matrix = scipy.matrix([
+_usno_to_sdss_matrix = scipy.array([
     [1, 0,      0,      0,              0], #u
     [0, 1.06,   -0.06,  0,              0], #g
     [0, 0,      1.035,  -0.035,         0], #r
@@ -10,9 +10,9 @@ _usno_to_sdss_matrix = scipy.matrix([
     [0, 0,      0,      -0.03,          1.03]  #z
 ])
 
-_sdss_to_usno_matrix = _usno_to_sdss_matrix.I
+_sdss_to_usno_matrix = scipy.asarray(scipy.asmatrix(_usno_to_sdss_matrix).I)
 
-_sdss_to_usno_offset = scipy.matrix([
+_sdss_to_usno_offset = scipy.array([
     [0],
     [0.06 * 0.53],
     [0.035 * 0.21],
@@ -34,9 +34,12 @@ def sdss_to_usno(sdss_ugriz):
             system in the same format as the input.
     """
 
-    return scipy.asarray(_sdss_to_usno_matrix * (sdss_ugriz
-                                                 +
-                                                 _sdss_to_usno_offset))
+    assert sdss_ugriz.shape[0] == 5
+    return scipy.tensordot(
+        _sdss_to_usno_matrix,
+        (sdss_ugriz.T + _sdss_to_usno_offset.T).T,
+        1
+    )
 
 def usno_to_sdss(usno_ugriz):
     """
