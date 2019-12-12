@@ -707,7 +707,7 @@ class PeriodSolverWrapper:
 
         return result
 
-def secondary_is_star(system):
+def check_if_secondary_is_star(system):
     """True iff the secondary in the system should be evolved as a star."""
 
     return (
@@ -737,6 +737,7 @@ def find_evolution(system,
                    secondary_core_envelope_coupling_timescale=0.05,
                    orbital_period_tolerance=1e-6,
                    solve=True,
+                   secondary_is_star=None,
                    **extra_evolve_args):
     """
     Find the evolution of the given system.
@@ -784,6 +785,10 @@ def find_evolution(system,
             and/or eccentricity. Instead, the system parameters are assumed to
             be initial values.
 
+        secondary_is_star(bool or None):    Should the secondary object in the
+            system be created as a star? If None, this is automatically
+            determined based on the object's mass (large mass => star).
+
         extra_evolve_args:    Any extra arguments to pass to Binary.evolve().
 
     Returns:
@@ -801,6 +806,9 @@ def find_evolution(system,
             disk_period = (2.0 * scipy.pi * system.Rsecondary
                            /
                            system.Vsini)
+
+    if secondary_is_star is None:
+        secondary_is_star = check_if_secondary_is_star(system)
     max_timestep = 1e-3 * units.Gyr
     #pylint: enable=no-member
     period_solver = PeriodSolverWrapper(
@@ -815,7 +823,7 @@ def find_evolution(system,
         disk_dissipation_age=disk_dissipation_age,
         max_timestep=max_timestep,
         dissipation=dissipation,
-        secondary_star=secondary_is_star(system),
+        secondary_star=secondary_is_star,
         primary_wind_strength=primary_wind_strength,
         primary_wind_saturation=primary_wind_saturation,
         primary_core_envelope_coupling_timescale=(

@@ -295,7 +295,13 @@ def read_nasa_planets(csv_filename,
     def do_fill_missing(result):
         """Add the data from fill_missing to result."""
 
-        system_names = list(result.pl_hostname)
+        system_names = list(
+            getattr(
+                result,
+                'pl_hostname',
+                getattr(result, 'fpl_hostname')
+            )
+        )
         for fill_system in fill_missing:
             try:
                 fill_index = system_names.index(fill_system['pl_hostname'])
@@ -325,6 +331,27 @@ def read_nasa_planets(csv_filename,
         data = do_eliminate()
 
     result = Structure()
+    string_columns = ['pl_hostname',
+                      'pl_name',
+                      'pl_discmethod',
+                      'pl_bmassprov',
+                      'st_optband',
+                      'rowupdate',
+                      'pl_letter',
+                      'pl_tsystemref',
+                      'pl_locale',
+                      'pl_facility',
+                      'pl_telescope',
+                      'pl_instrument',
+                      'pl_publ_date',
+                      'hd_name',
+                      'hip_name',
+                      'st_spstr',
+                      'st_metratio',
+                      'st_optmagband',
+                      'st_nirmagband',
+                      'st_spt',
+                      'swasp_id']
     column_name_list = []
     with open(csv_filename, 'r') as csv_file:
         for line in csv_file:
@@ -344,24 +371,9 @@ def read_nasa_planets(csv_filename,
                 else:
                     column_units = None
             if (
-                    column_name in ['pl_hostname',
-                                    'pl_name',
-                                    'pl_discmethod',
-                                    'pl_bmassprov',
-                                    'st_optband',
-                                    'rowupdate',
-                                    'pl_letter',
-                                    'pl_tsystemref',
-                                    'pl_locale',
-                                    'pl_facility',
-                                    'pl_telescope',
-                                    'pl_instrument',
-                                    'pl_publ_date',
-                                    'hd_name',
-                                    'hip_name',
-                                    'st_spstr',
-                                    'st_metratio',
-                                    'swasp_id']
+                    column_name in string_columns
+                    or
+                    column_name[0] == 'f' and column_name[1:] in string_columns
                     or
                     column_name.endswith('_str')
                     or
