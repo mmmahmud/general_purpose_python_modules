@@ -298,8 +298,10 @@ def read_nasa_planets(csv_filename,
         system_names = list(
             getattr(
                 result,
-                'pl_hostname',
-                getattr(result, 'fpl_hostname')
+                (
+                    'pl_hostname' if hasattr(result, 'pl_hostname')
+                    else 'fpl_hostname'
+                )
             )
         )
         for fill_system in fill_missing:
