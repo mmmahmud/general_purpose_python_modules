@@ -390,8 +390,8 @@ def read_nasa_planets(csv_filename,
                 ]
             column_values = numpy.array(column_values)
 
-            print(column_name + ' units: ' + repr(column_units))
             if add_units and column_units is not None:
+                print(column_name + ' units: ' + repr(column_units))
                 column_values *= column_units
             setattr(
                 result,
